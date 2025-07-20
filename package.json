@@ -1,14 +1,11 @@
 {
-  "name": "chess-game-project",
+  "name": "chess-game",
   "version": "1.0.0",
-  "description": "Chess game project with C engine and Node.js communication via file-based JSON",
   "main": "server.js",
   "scripts": {
-    "start": "./start.sh"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2"
-  },
-  "author": "Your Name",
-  "license": "ISC"
+  }
 }
