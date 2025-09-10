@@ -1,0 +1,1665 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, addDoc, setDoc, deleteDoc, onSnapshot, collection, query, getDoc, serverTimestamp } from 'firebase/firestore';
+import { ArrowLeft, BarChart2, Bot, Plus, Settings, Trash2, Send, CheckCircle, Loader2, Share2, Edit, Eye, LogOut, Download, GitBranch, Languages, Sparkles, List, FileText, Mic, MicOff, Zap, MessageSquare, Image as ImageIcon, ShieldCheck, User, Mail, Phone, MessageCircle } from 'lucide-react';
+
+// --- Firebase Configuration ---
+// This configuration is provided by the environment.
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_AUTH_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
+};
+
+// --- Main App Component ---
+export default function App() {
+    // --- State Management ---
+    const [page, setPage] = useState('dashboard'); // 'dashboard', 'builder', 'analytics', 'takeSurvey', 'settings'
+    const [selectedSurveyId, setSelectedSurveyId] = useState(null);
+    const [surveys, setSurveys] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [toast, setToast] = useState({ show: false, message: '' });
+    const [integrations, setIntegrations] = useState({ googleSheets: false, slack: false });
+
+    // Firebase state
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'ai-survey-tool';
+
+    // --- Firebase Initialization and Auth ---
+    useEffect(() => {
+        const app = initializeApp(firebaseConfig);
+        const firestoreDb = getFirestore(app);
+        const firestoreAuth = getAuth(app);
+        setDb(firestoreDb);
+        setAuth(firestoreAuth);
+
+        const unsubscribe = onAuthStateChanged(firestoreAuth, async (user) => {
+            if (user) {
+                setUserId(user.uid);
+                setIsAuthReady(true);
+            } else {
+                try {
+                    const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                    if (initialToken) {
+                        await signInWithCustomToken(firestoreAuth, initialToken);
+                    } else {
+                        await signInAnonymously(firestoreAuth);
+                    }
+                } catch (error) {
+                    console.error("Anonymous sign-in failed:", error);
+                    setIsLoading(false);
+                }
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+    // --- Data Fetching (Surveys) ---
+    useEffect(() => {
+        if (!isAuthReady || !db || !userId) return;
+
+        setIsLoading(true);
+        const surveysCollectionPath = `artifacts/${appId}/users/${userId}/surveys`;
+        const q = query(collection(db, surveysCollectionPath));
+
+        const unsubscribe = onSnapshot(q, (querySnapshot) => {
+            const surveysData = [];
+            querySnapshot.forEach((doc) => {
+                surveysData.push({ id: doc.id, ...doc.data() });
+            });
+            setSurveys(surveysData);
+            setIsLoading(false);
+        }, (error) => {
+            console.error("Error fetching surveys:", error);
+            showToast("Error fetching surveys.");
+            setIsLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [isAuthReady, db, userId, appId]);
+    
+    // --- Navigation Handlers ---
+    const navigateToBuilder = (surveyId = null) => {
+        setSelectedSurveyId(surveyId);
+        setPage('builder');
+    };
+
+    const navigateToAnalytics = (surveyId) => {
+        setSelectedSurveyId(surveyId);
+        setPage('analytics');
+    };
+    
+    const navigateToTakeSurvey = (surveyId) => {
+        setSelectedSurveyId(surveyId);
+        setPage('takeSurvey');
+    };
+
+    const navigateToDashboard = () => {
+        setSelectedSurveyId(null);
+        setPage('dashboard');
+    };
+
+    // --- Utility Functions ---
+    const showToast = (message) => {
+        setToast({ show: true, message });
+        setTimeout(() => setToast({ show: false, message: '' }), 3000);
+    };
+
+    // --- Render Logic ---
+    const renderPage = () => {
+        const survey = surveys.find(s => s.id === selectedSurveyId);
+        switch (page) {
+            case 'builder':
+                return <SurveyBuilderPage db={db} auth={auth} userId={userId} appId={appId} surveyId={selectedSurveyId} onBack={navigateToDashboard} showToast={showToast} />;
+            case 'analytics':
+                return <AnalyticsPage db={db} userId={userId} appId={appId} surveyId={selectedSurveyId} onBack={navigateToDashboard} integrations={integrations} showToast={showToast} />;
+            case 'takeSurvey':
+                if (survey?.surveyType === 'conversational') {
+                    return <ConversationalSurveyTakerPage db={db} userId={userId} appId={appId} surveyId={selectedSurveyId} onBack={navigateToDashboard} showToast={showToast} survey={survey} />;
+                }
+                return <SurveyTakerPage db={db} userId={userId} appId={appId} surveyId={selectedSurveyId} onBack={navigateToDashboard} showToast={showToast} />;
+            case 'settings':
+                 return <SettingsPage onBack={navigateToDashboard} userId={userId} integrations={integrations} setIntegrations={setIntegrations} />;
+            case 'dashboard':
+            default:
+                return <DashboardPage surveys={surveys} isLoading={isLoading} onNewSurvey={() => navigateToBuilder()} onEdit={navigateToBuilder} onAnalytics={navigateToAnalytics} onTakeSurvey={navigateToTakeSurvey} setPage={setPage} />;
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-800">
+            <div className="container mx-auto p-4 sm:p-6 lg:p-8">
+                {renderPage()}
+            </div>
+            {toast.show && <Toast message={toast.message} />}
+        </div>
+    );
+}
+
+// --- Page Components ---
+
+function DashboardPage({ surveys, isLoading, onNewSurvey, onEdit, onAnalytics, onTakeSurvey, setPage }) {
+    const [showShareModal, setShowShareModal] = useState(false);
+    const [selectedSurveyForShare, setSelectedSurveyForShare] = useState(null);
+
+    const openShareModal = (survey) => {
+        setSelectedSurveyForShare(survey);
+        setShowShareModal(true);
+    };
+
+    const closeShareModal = () => {
+        setShowShareModal(false);
+        setSelectedSurveyForShare(null);
+    };
+    
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const surveyId = urlParams.get('surveyId');
+        if (surveyId) {
+            onTakeSurvey(surveyId);
+        }
+    }, [onTakeSurvey]);
+
+
+    return (
+        <main>
+            <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
+                <div>
+                    <h1 className="text-3xl font-bold text-slate-900">My Surveys</h1>
+                    <p className="text-slate-500 mt-1">Create, manage, and analyze your surveys.</p>
+                </div>
+                <div className="flex items-center space-x-2 mt-4 sm:mt-0">
+                    <button onClick={() => setPage('settings')} className="p-2 rounded-md hover:bg-slate-200 transition-colors">
+                        <Settings className="h-5 w-5 text-slate-600" />
+                    </button>
+                    <button onClick={onNewSurvey} className="flex items-center justify-center bg-indigo-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors">
+                        <Plus className="h-5 w-5 mr-2" />
+                        Create Survey
+                    </button>
+                </div>
+            </header>
+
+            {isLoading ? (
+                <div className="text-center py-10">
+                    <Loader2 className="h-8 w-8 animate-spin text-indigo-600 mx-auto" />
+                    <p className="mt-2 text-slate-500">Loading your surveys...</p>
+                </div>
+            ) : surveys.length === 0 ? (
+                <div className="text-center py-20 border-2 border-dashed border-slate-300 rounded-lg">
+                    <h2 className="text-xl font-semibold text-slate-700">No surveys yet!</h2>
+                    <p className="text-slate-500 mt-2">Click "Create Survey" to get started with our AI assistant.</p>
+                    <button onClick={onNewSurvey} className="mt-6 flex items-center mx-auto bg-indigo-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors">
+                        <Plus className="h-5 w-5 mr-2" />
+                        Create Your First Survey
+                    </button>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {surveys.map(survey => (
+                        <div key={survey.id} className="bg-white p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow border border-slate-200 flex flex-col justify-between">
+                           <div>
+                                <div className="flex justify-between items-start">
+                                    <h3 className="text-lg font-bold text-slate-800 truncate pr-2">{survey.title || 'Untitled Survey'}</h3>
+                                    {survey.surveyType === 'conversational' ? 
+                                        <span title="Conversational AI Survey" className="flex items-center text-xs bg-purple-100 text-purple-700 font-semibold px-2 py-1 rounded-full"><Sparkles className="h-3 w-3 mr-1"/> AI Agent</span> :
+                                        <span title="Standard Survey" className="flex items-center text-xs bg-slate-100 text-slate-700 font-semibold px-2 py-1 rounded-full"><List className="h-3 w-3 mr-1"/> Standard</span>
+                                    }
+                                </div>
+                                <p className="text-sm text-slate-500 mt-1">{survey.surveyType === 'conversational' ? `Goal: ${survey.researchGoal?.substring(0, 50)}...` : `${survey.questions?.length || 0} questions`}</p>
+                                <p className="text-xs text-slate-400 mt-2">Created: {survey.createdAt ? new Date(survey.createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}</p>
+                            </div>
+                            <div className="mt-6 flex items-center justify-end space-x-2">
+                                <button onClick={() => openShareModal(survey)} title="Share" className="p-2 rounded-md hover:bg-slate-100 transition-colors"><Share2 className="h-4 w-4 text-slate-500" /></button>
+                                <button onClick={() => onTakeSurvey(survey.id)} title="Preview" className="p-2 rounded-md hover:bg-slate-100 transition-colors"><Eye className="h-4 w-4 text-slate-500" /></button>
+                                <button onClick={() => onAnalytics(survey.id)} title="Analytics" className="p-2 rounded-md hover:bg-slate-100 transition-colors"><BarChart2 className="h-4 w-4 text-slate-500" /></button>
+                                <button onClick={() => onEdit(survey.id)} title="Edit" className="p-2 rounded-md bg-slate-100 hover:bg-slate-200 transition-colors"><Edit className="h-4 w-4 text-indigo-600" /></button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {showShareModal && <ShareModal survey={selectedSurveyForShare} onClose={closeShareModal} />}
+        </main>
+    );
+}
+
+function SurveyBuilderPage({ db, auth, userId, appId, surveyId, onBack, showToast }) {
+    const [title, setTitle] = useState('');
+    const [surveyType, setSurveyType] = useState('standard');
+    const [researchGoal, setResearchGoal] = useState('');
+    const [questions, setQuestions] = useState([]);
+    const [aiTopic, setAiTopic] = useState('');
+    const [numQuestions, setNumQuestions] = useState(5);
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    
+    useEffect(() => {
+        if (surveyId && db) {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/surveys`, surveyId);
+            getDoc(docRef).then(docSnap => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    setTitle(data.title);
+                    setSurveyType(data.surveyType || 'standard');
+                    setResearchGoal(data.researchGoal || '');
+                    const questionsData = data.questions || [];
+                    const questionsWithLogic = questionsData.map(q => ({ ...q, logic: q.logic || [] }));
+                    setQuestions(questionsWithLogic);
+                }
+            });
+        }
+    }, [surveyId, db, userId, appId]);
+
+    const handleGenerateQuestions = async () => {
+        if (!aiTopic.trim()) {
+            showToast("Please enter a topic for the AI.");
+            return;
+        }
+        setIsGenerating(true);
+        
+        const prompt = `Generate ${numQuestions || 5} diverse survey questions about "${aiTopic}". Include Multiple Choice (MCQ), Open Text, and Rating Scale (1-5) questions. Provide the output as a valid JSON array of objects.`;
+
+        const responseSchema = {
+            type: "ARRAY",
+            items: {
+                type: "OBJECT",
+                properties: {
+                    questionText: { type: "STRING" },
+                    type: { type: "STRING", enum: ["MCQ", "TEXT", "RATING", "IMAGE"] },
+                    options: { type: "ARRAY", items: { type: "STRING" } },
+                    ratingMax: { type: "NUMBER" },
+                    imagePrompt: { type: "STRING" }
+                },
+                required: ["questionText", "type"]
+            }
+        };
+
+        try {
+            const payload = {
+                contents: [{ role: "user", parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: "application/json", responseSchema }
+            };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+
+            const result = await response.json();
+            const generatedText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            
+            if (generatedText) {
+                const generatedQuestions = JSON.parse(generatedText).map(q => {
+                    const imageUrl = q.type === 'IMAGE' ? `https://placehold.co/600x400/E2E8F0/475569?text=${encodeURIComponent(q.imagePrompt || 'AI Generated Image')}` : undefined;
+                    return { ...q, logic: [], imageUrl };
+                });
+                setQuestions(prev => [...prev, ...generatedQuestions]);
+                showToast("AI questions added!");
+            } else {
+                 throw new Error("No content received from AI.");
+            }
+
+        } catch (error) {
+            console.error("AI Generation Error:", error);
+            showToast("Failed to generate questions. Please try again.");
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+    
+    const addQuestion = (type = 'TEXT') => {
+        const newQuestion = { questionText: '', type: type, options: type === 'MCQ' || type === 'IMAGE' ? ['', ''] : undefined, ratingMax: type === 'RATING' ? 5 : undefined, logic: [] };
+        setQuestions([...questions, newQuestion]);
+    };
+
+    const updateQuestion = (index, field, value) => {
+        const newQuestions = [...questions];
+        newQuestions[index][field] = value;
+        setQuestions(newQuestions);
+    };
+    
+    const updateOption = (qIndex, oIndex, value) => {
+        const newQuestions = [...questions];
+        newQuestions[qIndex].options[oIndex] = value;
+        setQuestions(newQuestions);
+    };
+
+    const addOption = (qIndex) => {
+        const newQuestions = [...questions];
+        newQuestions[qIndex].options.push('');
+        setQuestions(newQuestions);
+    };
+
+    const removeOption = (qIndex, oIndex) => {
+        const newQuestions = [...questions];
+        newQuestions[qIndex].options.splice(oIndex, 1);
+        newQuestions[qIndex].logic = newQuestions[qIndex].logic.filter(l => l.triggerAnswer !== questions[qIndex].options[oIndex]);
+        setQuestions(newQuestions);
+    };
+    
+    const removeQuestion = (index) => {
+        const newQuestions = [...questions];
+        newQuestions.splice(index, 1);
+        newQuestions.forEach(q => {
+            q.logic = q.logic?.filter(l => l.targetQuestion !== index);
+        });
+        setQuestions(newQuestions);
+    };
+
+    const setBranchingLogic = (qIndex, optionValue, targetQIndex) => {
+        const newQuestions = [...questions];
+        const questionLogic = newQuestions[qIndex].logic || [];
+        
+        const existingRuleIndex = questionLogic.findIndex(l => l.triggerAnswer === optionValue);
+
+        if (targetQIndex === "next") { 
+             if(existingRuleIndex > -1) questionLogic.splice(existingRuleIndex, 1);
+        } else {
+            const target = targetQIndex === 'end' ? 'end' : parseInt(targetQIndex, 10);
+            if (existingRuleIndex > -1) {
+                questionLogic[existingRuleIndex].targetQuestion = target;
+            } else {
+                questionLogic.push({ triggerAnswer: optionValue, targetQuestion: target });
+            }
+        }
+        
+        newQuestions[qIndex].logic = questionLogic;
+        setQuestions(newQuestions);
+    };
+
+    const handleSaveSurvey = async () => {
+        if (!title.trim()) {
+            showToast("Please provide a title for your survey.");
+            return;
+        }
+        if (surveyType === 'conversational' && !researchGoal.trim()) {
+            showToast("Please provide a research goal for the AI agent.");
+            return;
+        }
+        setIsSaving(true);
+        
+        const cleanedQuestions = questions.map(q => {
+            const cleanedQ = { ...q };
+            Object.keys(cleanedQ).forEach(key => {
+                if (cleanedQ[key] === undefined) {
+                    cleanedQ[key] = null;
+                }
+            });
+            return cleanedQ;
+        });
+
+        const surveyData = {
+            title,
+            surveyType,
+            researchGoal: surveyType === 'conversational' ? researchGoal : null,
+            questions: surveyType === 'standard' ? cleanedQuestions : [],
+            owner: userId,
+            updatedAt: serverTimestamp(),
+        };
+
+        if (!surveyId) {
+            surveyData.createdAt = serverTimestamp();
+        }
+
+        try {
+            if (surveyId) {
+                const docRef = doc(db, `artifacts/${appId}/users/${userId}/surveys`, surveyId);
+                await setDoc(docRef, surveyData, { merge: true });
+                showToast("Survey updated successfully!");
+            } else {
+                const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/surveys`);
+                await addDoc(collectionRef, surveyData);
+                showToast("Survey created successfully!");
+            }
+            onBack();
+        } catch (error) {
+            console.error("Error saving survey:", error);
+            showToast("Failed to save survey.");
+        } finally {
+            setIsSaving(false);
+        }
+    };
+    
+    const handleDeleteSurvey = async () => {
+        if (!surveyId || !window.confirm("Are you sure you want to delete this survey? This action cannot be undone.")) return;
+        
+        try {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/surveys`, surveyId);
+            await deleteDoc(docRef);
+            showToast("Survey deleted.");
+            onBack();
+        } catch (error) {
+            console.error("Error deleting survey:", error);
+            showToast("Failed to delete survey.");
+        }
+    }
+
+    return (
+        <div>
+            <header className="flex items-center justify-between mb-8">
+                <button onClick={onBack} className="flex items-center text-slate-600 hover:text-indigo-600">
+                    <ArrowLeft className="h-5 w-5 mr-2" /> Back to Dashboard
+                </button>
+                <div className="flex items-center space-x-2">
+                    {surveyId && <button onClick={handleDeleteSurvey} className="text-red-500 hover:text-red-700 font-semibold px-4 py-2 rounded-lg hover:bg-red-100 transition-colors"><Trash2 className="h-4 w-4"/></button>}
+                    <button onClick={handleSaveSurvey} disabled={isSaving} className="bg-indigo-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors disabled:bg-indigo-300">
+                        {isSaving ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Save Survey'}
+                    </button>
+                </div>
+            </header>
+
+            <div className="bg-white p-8 rounded-xl shadow-md border border-slate-200">
+                <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Survey Title (e.g., Customer Satisfaction)" className="w-full text-2xl font-bold p-2 border-b-2 border-slate-200 focus:border-indigo-500 outline-none transition-colors" />
+                
+                <div className="my-8">
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Survey Type</label>
+                    <div className="flex rounded-lg border border-slate-300 p-1 bg-slate-100">
+                        <button onClick={() => setSurveyType('standard')} className={`flex-1 p-2 rounded-md text-sm font-semibold transition-colors ${surveyType === 'standard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}>
+                            Standard Survey
+                        </button>
+                        <button onClick={() => setSurveyType('conversational')} className={`flex-1 p-2 rounded-md text-sm font-semibold transition-colors ${surveyType === 'conversational' ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-600'}`}>
+                            Conversational AI
+                        </button>
+                    </div>
+                </div>
+
+                {surveyType === 'standard' ? (
+                    <>
+                        <div className="p-6 bg-slate-50 border border-dashed border-slate-300 rounded-lg">
+                            <div className="flex items-center mb-4">
+                                <Bot className="h-6 w-6 text-indigo-600 mr-3" />
+                                <h3 className="text-lg font-bold text-slate-800">AI Question Assistant</h3>
+                            </div>
+                            <p className="text-slate-600 mb-4 text-sm">Describe a topic and number of questions.</p>
+                            <input type="text" value={aiTopic} onChange={e => setAiTopic(e.target.value)} placeholder="e.g., Coffee shop feedback" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                            <div className="flex items-center space-x-2 mt-2">
+                                <input type="number" value={numQuestions} onChange={e => setNumQuestions(e.target.value === '' ? '' : parseInt(e.target.value, 10))} min="1" max="20" className="w-20 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                                <button onClick={() => handleGenerateQuestions()} disabled={isGenerating} className="w-full flex items-center justify-center bg-indigo-500 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-indigo-600 transition-colors disabled:bg-indigo-300">
+                                    {isGenerating ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Generate'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-6 mt-8">
+                            {questions.map((q, qIndex) => (
+                                <div key={qIndex} className="p-6 bg-white border border-slate-200 rounded-lg relative">
+                                    <div className="flex justify-between items-start">
+                                        <span className="text-indigo-600 font-bold text-lg mr-4">{qIndex + 1}</span>
+                                        <div className="w-full pr-10">
+                                            <input type="text" value={q.questionText} onChange={e => updateQuestion(qIndex, 'questionText', e.target.value)} placeholder="Type your question here" className="w-full font-semibold p-1 border-b border-transparent focus:border-slate-300 outline-none" />
+                                        </div>
+                                        <div className="flex items-center space-x-2 absolute top-4 right-4">
+                                            <select value={q.type} onChange={e => updateQuestion(qIndex, 'type', e.target.value)} className="text-sm border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                                <option value="TEXT">Open Text</option>
+                                                <option value="MCQ">Multiple Choice</option>
+                                                <option value="RATING">Rating Scale</option>
+                                                <option value="IMAGE">Image Choice</option>
+                                            </select>
+                                            <button onClick={() => removeQuestion(qIndex)} className="text-slate-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
+                                        </div>
+                                    </div>
+                                    <div className="mt-4 pl-10">
+                                        {q.type === 'IMAGE' && (
+                                            <div className="mb-2">
+                                                <label className="text-sm font-medium text-slate-600">Image URL:</label>
+                                                <input type="text" value={q.imageUrl || ''} onChange={e => updateQuestion(qIndex, 'imageUrl', e.target.value)} placeholder="https://..." className="w-full mt-1 p-2 border border-slate-300 rounded-md" />
+                                                {q.imageUrl && <img src={q.imageUrl} alt="Survey visual" className="mt-2 rounded-lg max-h-48" />}
+                                            </div>
+                                        )}
+                                        {(q.type === 'MCQ' || q.type === 'IMAGE') && (
+                                            <div className="space-y-2">
+                                                {q.options.map((opt, oIndex) => {
+                                                    const logicRule = q.logic?.find(l => l.triggerAnswer === opt);
+                                                    return (
+                                                        <div key={oIndex} className="flex items-center group">
+                                                            <input type="radio" disabled className="mr-3" />
+                                                            <input type="text" value={opt} onChange={e => updateOption(qIndex, oIndex, e.target.value)} placeholder={`Option ${oIndex + 1}`} className="w-full p-1 border-b border-slate-200 focus:border-indigo-400 outline-none" />
+                                                            <button onClick={() => removeOption(qIndex, oIndex)} className="ml-2 text-slate-400 hover:text-red-500"><Trash2 className="h-3 w-3" /></button>
+                                                            <div className="relative ml-2">
+                                                                <select
+                                                                    title="Add branching logic"
+                                                                    value={logicRule ? logicRule.targetQuestion : 'next'}
+                                                                    onChange={(e) => setBranchingLogic(qIndex, opt, e.target.value)}
+                                                                    className={`p-1 rounded-md transition-colors ${logicRule ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                                                >
+                                                                    <option value="next">→ Next Question</option>
+                                                                    {questions.map((_, nextQIndex) => (
+                                                                        nextQIndex > qIndex && <option key={nextQIndex} value={nextQIndex}>→ Jump to Q{nextQIndex + 1}</option>
+                                                                    ))}
+                                                                    <option value="end">→ End Survey</option>
+                                                                </select>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                                <button onClick={() => addOption(qIndex)} className="text-sm text-indigo-600 hover:text-indigo-800 font-semibold mt-2">+ Add Option</button>
+                                            </div>
+                                        )}
+                                        {q.type === 'RATING' && (
+                                            <div className="flex items-center space-x-2 text-slate-400">
+                                                {[...Array(q.ratingMax || 5)].map((_, i) => (
+                                                    <span key={i} className="h-8 w-8 border border-slate-300 rounded-full flex items-center justify-center">{i + 1}</span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {q.type === 'TEXT' && (
+                                            <textarea disabled placeholder="Respondent will type their answer here..." className="w-full p-2 border border-slate-200 rounded-md bg-slate-50"></textarea>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                         <button onClick={() => addQuestion()} className="mt-6 flex items-center text-indigo-600 hover:text-indigo-800 font-semibold">
+                            <Plus className="h-5 w-5 mr-2" /> Add Question Manually
+                        </button>
+                    </>
+                ) : (
+                    <div className="p-6 bg-purple-50 border border-dashed border-purple-300 rounded-lg">
+                        <div className="flex items-center mb-4">
+                            <Sparkles className="h-6 w-6 text-purple-600 mr-3" />
+                            <h3 className="text-lg font-bold text-slate-800">AI Survey Agent</h3>
+                        </div>
+                        <p className="text-slate-600 mb-4 text-sm">Describe the goal of your research. The AI agent will handle the interview process from start to finish to achieve this goal.</p>
+                        <textarea value={researchGoal} onChange={e => setResearchGoal(e.target.value)} placeholder="e.g., Find out why users are uninstalling my new fitness app." rows="4" className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none"></textarea>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function AnalyticsPage({ db, userId, appId, surveyId, onBack, integrations, showToast }) {
+    const [survey, setSurvey] = useState(null);
+    const [responses, setResponses] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [aiSummary, setAiSummary] = useState({ short: '', detailed: '' });
+    const [translatedSummary, setTranslatedSummary] = useState('');
+    const [summaryLang, setSummaryLang] = useState('en');
+    const [isTranslatingSummary, setIsTranslatingSummary] = useState(false);
+    const [isGeneratingSummary, setIsGeneratingSummary] = useState({ short: false, detailed: false });
+    const [prediction, setPrediction] = useState(null);
+    const [isPredicting, setIsPredicting] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [activeTab, setActiveTab] = useState('summary'); // 'summary', 'qa'
+
+    useEffect(() => {
+        if (!db || !surveyId) return;
+
+        const fetchSurveyData = async () => {
+            setIsLoading(true);
+            const surveyDocRef = doc(db, `artifacts/${appId}/users/${userId}/surveys`, surveyId);
+            const surveySnap = await getDoc(surveyDocRef);
+            if (surveySnap.exists()) {
+                setSurvey({ id: surveySnap.id, ...surveySnap.data() });
+            } else {
+                console.error("Survey not found");
+            }
+
+            const responsesColPath = `artifacts/${appId}/public/data/responses/${surveyId}/responses`;
+            const q = query(collection(db, responsesColPath));
+            const unsubscribe = onSnapshot(q, (querySnapshot) => {
+                const responsesData = [];
+                querySnapshot.forEach((doc) => {
+                    responsesData.push({ id: doc.id, ...doc.data() });
+                });
+                setResponses(responsesData);
+                setIsLoading(false);
+            }, (error) => {
+                console.error("Error fetching responses:", error);
+                setIsLoading(false);
+            });
+
+            return () => unsubscribe();
+        };
+
+        fetchSurveyData();
+    }, [db, surveyId, userId, appId]);
+    
+    const handleGenerateSummary = async (type) => {
+        if (!survey || responses.length === 0) {
+            showToast("Not enough data to generate a summary.");
+            return;
+        }
+        setIsGeneratingSummary(prev => ({ ...prev, [type]: true }));
+        setTranslatedSummary(''); // Clear translation on new generation
+        setSummaryLang('en');
+
+        const responsesText = responses.map(r => JSON.stringify(r.answers)).join('\n');
+        
+        let prompt = '';
+        if (type === 'short') {
+            prompt = `Analyze the following survey results and provide a concise executive summary as a bulleted list. Highlight only the most critical key points and takeaways.
+            Survey Title: ${survey.title}
+            Responses Data: ${responsesText.substring(0, 2000)}`;
+        } else {
+            prompt = `Analyze the following survey results and provide a comprehensive and detailed analysis in paragraphs. Identify key trends, significant findings, sentiment distribution, and potential areas of concern or opportunity.
+            Survey Title: ${survey.title}
+            Questions: ${survey.questions.map((q, i) => `${i + 1}. ${q.questionText} (${q.type})`).join('\n')}
+            Responses Data: ${responsesText.substring(0, 4000)}`;
+        }
+
+        try {
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) throw new Error("API request failed");
+
+            const result = await response.json();
+            const summaryText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            setAiSummary(prev => ({ ...prev, [type]: summaryText || `Could not generate ${type} summary.` }));
+
+        } catch (error) {
+            console.error("AI Summary Error:", error);
+            setAiSummary(prev => ({ ...prev, [type]: `An error occurred while generating the ${type} summary.` }));
+        } finally {
+            setIsGeneratingSummary(prev => ({ ...prev, [type]: false }));
+        }
+    };
+
+    const handleTranslateSummary = async (lang) => {
+        setSummaryLang(lang);
+        const summaryToTranslate = aiSummary.detailed || aiSummary.short;
+        if (lang === 'en' || !summaryToTranslate) {
+            setTranslatedSummary('');
+            return;
+        }
+        setIsTranslatingSummary(true);
+        const langName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
+        const prompt = `Translate the following text to ${langName}:\n\n${summaryToTranslate}`;
+        try {
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!response.ok) throw new Error("Translation API failed");
+            const result = await response.json();
+            setTranslatedSummary(result?.candidates?.[0]?.content?.parts?.[0]?.text);
+        } catch (error) {
+            console.error("Summary Translation Error:", error);
+            showToast("Failed to translate summary.");
+        } finally {
+            setIsTranslatingSummary(false);
+        }
+    };
+    
+    const handleGeneratePrediction = async () => {
+        if (!survey || responses.length < 5) {
+            setPrediction({ error: "Need at least 5 responses to generate a prediction." });
+            return;
+        }
+        setIsPredicting(true);
+        setPrediction(null);
+
+        const mcqQuestionIndex = survey.questions.findIndex(q => q.type === 'MCQ');
+        if (mcqQuestionIndex === -1) {
+            setPrediction({ error: "No multiple-choice question found to analyze for prediction." });
+            setIsPredicting(false);
+            return;
+        }
+        
+        const question = survey.questions[mcqQuestionIndex];
+        const currentResults = getChartData(mcqQuestionIndex);
+        const totalResponses = responses.length;
+
+        const simulations = 1000;
+        const projectedTotal = 100;
+        const remainingResponses = projectedTotal - totalResponses > 0 ? projectedTotal - totalResponses : 0;
+        let wins = {};
+        question.options.forEach(opt => { wins[opt] = 0; });
+
+        const probabilities = question.options.map(opt => (currentResults[opt] || 0) / totalResponses);
+
+        for (let i = 0; i < simulations; i++) {
+            let futureCounts = { ...currentResults };
+            if (remainingResponses > 0) {
+                for (let j = 0; j < remainingResponses; j++) {
+                    let rand = Math.random();
+                    let cumulativeProb = 0;
+                    for (let k = 0; k < probabilities.length; k++) {
+                        cumulativeProb += probabilities[k];
+                        if (rand < cumulativeProb) {
+                            futureCounts[question.options[k]]++;
+                            break;
+                        }
+                    }
+                }
+            }
+            let winner = Object.keys(futureCounts).reduce((a, b) => futureCounts[a] > futureCounts[b] ? a : b);
+            wins[winner]++;
+        }
+        
+        const predictionData = question.options.map(opt => ({
+            option: opt,
+            probability: (wins[opt] / simulations) * 100
+        })).sort((a, b) => b.probability - a.probability);
+
+        const prompt = `Based on the following predictive analysis for the question "${question.questionText}", provide a short, confident summary.
+        Data: ${JSON.stringify(predictionData)}.
+        Explain what the most likely outcome is and mention the confidence level (probability).`;
+
+        try {
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!response.ok) throw new Error("Prediction summary API failed");
+            const result = await response.json();
+            const summary = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+            setPrediction({ data: predictionData, summary, question: question.questionText });
+        } catch (error) {
+            console.error("Prediction Error:", error);
+            setPrediction({ error: "Could not generate AI summary for the prediction." });
+        } finally {
+            setIsPredicting(false);
+        }
+    };
+
+    const getChartData = (questionIndex) => {
+        const question = survey.questions[questionIndex];
+        const data = {};
+        if (question.type === 'MCQ') {
+            question.options.forEach(opt => { data[opt] = 0; });
+        }
+
+        responses.forEach(res => {
+            const answer = res.answers.find(a => a.questionIndex === questionIndex);
+            if (answer && answer.value) {
+                if (data[answer.value] !== undefined) {
+                    data[answer.value]++;
+                }
+            }
+        });
+        return data;
+    };
+
+    const handleExportCSV = () => {
+        if (!survey || responses.length === 0) {
+            alert("No data to export.");
+            return;
+        }
+
+        let csvContent = "data:text/csv;charset=utf-8,";
+        
+        const headers = survey.questions.map(q => `"${q.questionText.replace(/"/g, '""')}"`);
+        csvContent += headers.join(',') + '\n';
+
+        responses.forEach(res => {
+            const row = survey.questions.map((q, qIndex) => {
+                const answer = res.answers.find(a => a.questionIndex === qIndex);
+                const value = answer ? answer.value : '';
+                const sentiment = answer && answer.sentiment ? ` [${answer.sentiment}]` : '';
+                return `"${String(value).replace(/"/g, '""')}${sentiment}"`;
+            });
+            csvContent += row.join(',') + '\n';
+        });
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `${survey.title.replace(/ /g,"_")}_responses.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    const handleSyncToSheets = () => {
+        if (!integrations.googleSheets) {
+            showToast("Please connect to Google Sheets in Settings first.");
+            return;
+        }
+        setIsSyncing(true);
+        setTimeout(() => {
+            setIsSyncing(false);
+            showToast("Responses successfully synced to Google Sheets!");
+        }, 2000);
+    };
+    
+    if (isLoading) return <div className="text-center py-10"><Loader2 className="h-8 w-8 animate-spin text-indigo-600 mx-auto" /><p className="mt-2 text-slate-500">Loading analytics...</p></div>;
+    if (!survey) return <div className="text-center py-10"><p>Survey not found.</p><button onClick={onBack} className="mt-4 text-indigo-600">Go to Dashboard</button></div>;
+
+    const currentSummary = aiSummary.detailed || aiSummary.short;
+    const displaySummary = summaryLang !== 'en' && translatedSummary ? translatedSummary : currentSummary;
+
+    return (
+        <div>
+            <header className="flex flex-col sm:flex-row items-center justify-between mb-8">
+                <button onClick={onBack} className="flex items-center text-slate-600 hover:text-indigo-600">
+                    <ArrowLeft className="h-5 w-5 mr-2" /> Back to Dashboard
+                </button>
+                <div className="flex items-center space-x-2 mt-4 sm:mt-0">
+                    {integrations.googleSheets && (
+                        <button onClick={handleSyncToSheets} disabled={isSyncing || responses.length === 0} className="flex items-center bg-white text-green-700 border border-green-300 font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-green-50 transition-colors disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200">
+                            {isSyncing ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <img src="https://upload.wikimedia.org/wikipedia/commons/3/34/Microsoft_Office_Excel_%282019%E2%80%93present%29.svg" alt="Google Sheets" className="h-5 w-5 mr-2"/>}
+                            {isSyncing ? 'Syncing...' : 'Sync to Sheets'}
+                        </button>
+                    )}
+                    <button onClick={handleExportCSV} disabled={responses.length === 0} className="flex items-center bg-green-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-green-700 transition-colors disabled:bg-green-300">
+                        <Download className="h-5 w-5 mr-2" />
+                        Export CSV
+                    </button>
+                </div>
+            </header>
+            
+            <div className="bg-white p-8 rounded-xl shadow-md border border-slate-200">
+                <h1 className="text-2xl font-bold text-slate-900">{survey.title}</h1>
+                <p className="text-slate-500 mt-1">{responses.length} Responses</p>
+
+                <div className="mt-8 border-b border-slate-200">
+                    <nav className="-mb-px flex space-x-6">
+                        <button onClick={() => setActiveTab('summary')} className={`py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'summary' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}`}>
+                            Summary & Insights
+                        </button>
+                        <button onClick={() => setActiveTab('qa')} className={`py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'qa' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'}`}>
+                           Quality Assurance
+                        </button>
+                    </nav>
+                </div>
+
+                {activeTab === 'summary' && (
+                    <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* AI Insights Column */}
+                        <div className="space-y-6">
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-6">
+                                 <div className="flex items-center mb-4">
+                                    <Bot className="h-6 w-6 text-indigo-600 mr-3" />
+                                    <h3 className="text-lg font-bold text-slate-800">AI-Powered Summaries</h3>
+                                </div>
+                                <p className="text-sm text-slate-500 mb-4">Generate insights from your collected data.</p>
+                                <div className="flex space-x-2">
+                                    <button onClick={() => handleGenerateSummary('short')} disabled={isGeneratingSummary.short || responses.length === 0} className="flex-1 flex items-center justify-center bg-indigo-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors disabled:bg-indigo-300">
+                                        {isGeneratingSummary.short ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Short Summary'}
+                                    </button>
+                                    <button onClick={() => handleGenerateSummary('detailed')} disabled={isGeneratingSummary.detailed || responses.length === 0} className="flex-1 flex items-center justify-center bg-indigo-100 text-indigo-700 font-semibold px-4 py-2 rounded-lg hover:bg-indigo-200 transition-colors disabled:bg-slate-200">
+                                        {isGeneratingSummary.detailed ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Detailed Summary'}
+                                    </button>
+                                </div>
+                            </div>
+                            {currentSummary && (
+                                 <div className="bg-white border border-slate-200 rounded-lg p-6 animate-fade-in">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center">
+                                            {aiSummary.detailed ? <FileText className="h-5 w-5 text-indigo-600 mr-2" /> : <List className="h-5 w-5 text-indigo-600 mr-2" />}
+                                            <h4 className="font-bold text-slate-800">{aiSummary.detailed ? 'Detailed Analysis' : 'Key Points'}</h4>
+                                        </div>
+                                        <div className="flex items-center space-x-1">
+                                            {isTranslatingSummary && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
+                                            <select value={summaryLang} onChange={e => handleTranslateSummary(e.target.value)} className="text-xs border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                                                <option value="en">English</option>
+                                                <option value="hi">Hindi</option>
+                                                <option value="bn">Bangla</option>
+                                                <option value="te">Telugu</option>
+                                                <option value="mr">Marathi</option>
+                                                <option value="ta">Tamil</option>
+                                                <option value="ur">Urdu</option>
+                                                <option value="gu">Gujarati</option>
+                                                <option value="kn">Kannada</option>
+                                                <option value="ml">Malayalam</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="prose prose-sm text-slate-600" dangerouslySetInnerHTML={{ __html: displaySummary.replace(/\*/g, '•') }}></div>
+                                 </div>
+                            )}
+                        </div>
+                        {/* Predictive Insights Column */}
+                        <div className="space-y-6">
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-6">
+                                <div className="flex items-center mb-4">
+                                    <Sparkles className="h-6 w-6 text-purple-600 mr-3" />
+                                    <h3 className="text-lg font-bold text-slate-800">Predictive Insights</h3>
+                                </div>
+                                <p className="text-sm text-slate-500 mb-4">Forecast final results based on current trends (min. 5 responses).</p>
+                                 <button onClick={handleGeneratePrediction} disabled={isPredicting || responses.length < 5} className="w-full flex items-center justify-center bg-purple-600 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:bg-purple-700 transition-colors disabled:bg-purple-300">
+                                    {isPredicting ? <Loader2 className="h-5 w-5 animate-spin" /> : 'Generate Prediction'}
+                                </button>
+                            </div>
+                            {isPredicting && <div className="text-center"><Loader2 className="h-6 w-6 animate-spin text-purple-600 mx-auto" /></div>}
+                            {prediction && (
+                                 <div className="bg-white border border-slate-200 rounded-lg p-6 animate-fade-in">
+                                    {prediction.error && <p className="text-red-600">{prediction.error}</p>}
+                                    {prediction.summary && <p className="text-sm text-purple-900 mb-4 italic">"{prediction.summary}"</p>}
+                                    {prediction.data && (
+                                        <div>
+                                            <h4 className="font-bold text-slate-800 mb-2">Projected Winner Probabilities</h4>
+                                            <p className="text-xs text-slate-500 mb-3">For question: "{prediction.question}"</p>
+                                            <div className="space-y-2">
+                                                {prediction.data.map(item => (
+                                                    <div key={item.option}>
+                                                        <div className="flex justify-between items-center text-sm text-slate-600 mb-1">
+                                                            <span>{item.option}</span>
+                                                            <span className="font-semibold">{item.probability.toFixed(1)}%</span>
+                                                        </div>
+                                                        <div className="w-full bg-slate-200 rounded-full h-2.5">
+                                                            <div className="bg-purple-500 h-2.5 rounded-full" style={{ width: `${item.probability}%` }}></div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                 </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {activeTab === 'qa' && (
+                    <QualityAssuranceTab responses={responses} survey={survey} />
+                )}
+
+                {activeTab === 'summary' && survey.surveyType === 'standard' && (
+                    <>
+                        <h2 className="text-xl font-bold text-slate-800 mt-12 mb-6 border-t pt-6">Individual Question Results</h2>
+                        <div className="space-y-8">
+                            {survey.questions && survey.questions.map((q, qIndex) => (
+                                <div key={qIndex} className="p-6 border border-slate-200 rounded-lg">
+                                    <p className="font-semibold text-slate-800">{qIndex + 1}. {q.questionText}</p>
+                                    <div className="mt-4">
+                                        {q.type === 'MCQ' && (
+                                            <div className="space-y-2">
+                                                {Object.entries(getChartData(qIndex)).map(([option, count]) => {
+                                                    const totalMcqResponses = responses.filter(r => r.answers.find(a => a.questionIndex === qIndex)?.value).length;
+                                                    const percentage = totalMcqResponses > 0 ? (count / totalMcqResponses) * 100 : 0;
+                                                    return (
+                                                        <div key={option}>
+                                                            <div className="flex justify-between items-center text-sm text-slate-600 mb-1">
+                                                                <span>{option}</span>
+                                                                <span>{count} ({percentage.toFixed(1)}%)</span>
+                                                            </div>
+                                                            <div className="w-full bg-slate-200 rounded-full h-2.5">
+                                                                <div className="bg-indigo-500 h-2.5 rounded-full" style={{ width: `${percentage}%` }}></div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                        {q.type === 'RATING' && (
+                                             <div className="space-y-2">
+                                                <p className="text-sm text-slate-500">Average Rating: {
+                                                    (responses.map(r => r.answers.find(a => a.questionIndex === qIndex)?.value).filter(v => typeof v === 'number').reduce((a, b) => a + b, 0) / responses.filter(r => typeof r.answers.find(a => a.questionIndex === qIndex)?.value === 'number').length || 0).toFixed(2)
+                                                }</p>
+                                            </div>
+                                        )}
+                                        {q.type === 'TEXT' && (
+                                            <div className="space-y-3 max-h-60 overflow-y-auto">
+                                                {responses.map(res => {
+                                                    const answer = res.answers.find(a => a.questionIndex === qIndex);
+                                                    return answer?.value ? (
+                                                        <div key={res.id} className="p-3 bg-slate-50 rounded-md border border-slate-200 text-sm">
+                                                            <p className="text-slate-700">{answer.value}</p>
+                                                            {answer.sentiment && <span className={`mt-1 inline-block text-xs font-semibold px-2 py-0.5 rounded-full ${answer.sentiment === 'Positive' ? 'bg-green-100 text-green-800' : answer.sentiment === 'Negative' ? 'bg-red-100 text-red-800' : 'bg-slate-200 text-slate-800'}`}>{answer.sentiment}</span>}
+                                                        </div>
+                                                    ) : null;
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function SurveyTakerPage({ db, userId, appId, surveyId, onBack, showToast }) {
+    const [originalSurvey, setOriginalSurvey] = useState(null);
+    const [displaySurvey, setDisplaySurvey] = useState(null);
+    const [answers, setAnswers] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSubmitted, setIsSubmitted] = useState(false);
+    const [visibleQuestionIndices, setVisibleQuestionIndices] = useState([0]);
+    const [translations, setTranslations] = useState({});
+    const [targetLanguage, setTargetLanguage] = useState('en');
+    const [isTranslating, setIsTranslating] = useState(false);
+    const [isListening, setIsListening] = useState(false);
+    const [listeningIndex, setListeningIndex] = useState(null);
+    const recognitionRef = useRef(null);
+    const questionTimestamps = useRef({});
+    const startTime = useRef(Date.now());
+
+    useEffect(() => {
+        questionTimestamps.current[0] = Date.now();
+    }, []);
+
+    // --- NEW: Voice Input Setup ---
+    useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = false;
+            recognitionRef.current.interimResults = false;
+
+            recognitionRef.current.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                const currentTextarea = document.querySelector(`textarea[data-q-index="${listeningIndex}"]`);
+                if(currentTextarea) {
+                    currentTextarea.value = transcript;
+                    handleAnswerChange(listeningIndex, transcript);
+                }
+                stopListening();
+            };
+            recognitionRef.current.onerror = (event) => {
+                console.error("Speech recognition error", event.error);
+                showToast("Voice recognition error. Please try again.");
+                stopListening();
+            };
+            recognitionRef.current.onend = () => {
+                if (isListening) {
+                   stopListening();
+                }
+            };
+        }
+    }, [listeningIndex]);
+
+    const startListening = (index) => {
+        if (!recognitionRef.current || isListening) return;
+        setListeningIndex(index);
+        setIsListening(true);
+        const langCode = languageCodeMap[targetLanguage] || 'en-US';
+        recognitionRef.current.lang = langCode;
+        recognitionRef.current.start();
+    };
+
+    const stopListening = () => {
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+        setIsListening(false);
+        setListeningIndex(null);
+    };
+
+    const languageCodeMap = {
+        en: 'en-US', as: 'as-IN', bn: 'bn-IN', gu: 'gu-IN', hi: 'hi-IN', kn: 'kn-IN',
+        ml: 'ml-IN', mr: 'mr-IN', ne: 'ne-NP', or: 'or-IN', pa: 'pa-IN', sd: 'sd-IN',
+        ta: 'ta-IN', te: 'te-IN', ur: 'ur-IN', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', ja: 'ja-JP',
+        bho: 'bho-IN' // Note: Bhojpuri (bho-IN) has very limited browser support
+    };
+    
+    useEffect(() => {
+        if (!db || !surveyId) return;
+        
+        const fetchSurvey = async () => {
+            setIsLoading(true);
+            let surveyData = null;
+            let docSnap = await getDoc(doc(db, `artifacts/${appId}/users/${userId}/surveys`, surveyId));
+
+            if (docSnap.exists()) {
+                surveyData = docSnap.data();
+            } else {
+                console.log("Survey not found in current user's collection.");
+            }
+            
+            if (surveyData) {
+                const questions = surveyData.questions || [];
+                const surveyWithLogic = { id: surveyId, ...surveyData, questions: questions.map(q => ({...q, logic: q.logic || []})) };
+                setOriginalSurvey(surveyWithLogic);
+                setDisplaySurvey(surveyWithLogic);
+                setAnswers(questions.map((_, index) => ({ questionIndex: index, value: '' })));
+                setVisibleQuestionIndices([0]);
+            } else {
+                console.error("Survey could not be loaded.");
+            }
+            setIsLoading(false);
+        };
+        fetchSurvey();
+    }, [db, surveyId, userId, appId]);
+
+    useEffect(() => {
+        if (targetLanguage === 'en') {
+            setDisplaySurvey(originalSurvey);
+            return;
+        }
+        if (translations[targetLanguage]) {
+            setDisplaySurvey(translations[targetLanguage]);
+            return;
+        }
+        
+        const translateSurvey = async () => {
+            if (!originalSurvey) return;
+            setIsTranslating(true);
+
+            const surveyJson = JSON.stringify({ title: originalSurvey.title, questions: originalSurvey.questions.map(q => ({questionText: q.questionText, options: q.options})) });
+            const langName = new Intl.DisplayNames(['en'], { type: 'language' }).of(targetLanguage);
+            const prompt = `Translate the JSON object's string values to ${langName}. Do not translate JSON keys. Respond with only the translated JSON object. JSON: ${surveyJson}`;
+
+            try {
+                const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+                const apiKey = "";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) throw new Error("Translation API request failed");
+                const result = await response.json();
+                
+                let translatedText = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (translatedText && translatedText.startsWith("```json")) {
+                    translatedText = translatedText.replace(/^```json\n/, '').replace(/\n```$/, '');
+                }
+
+                const translatedJson = JSON.parse(translatedText);
+                
+                const newTranslatedSurvey = {
+                    ...originalSurvey,
+                    title: translatedJson.title,
+                    questions: originalSurvey.questions.map((q, i) => ({
+                        ...q,
+                        questionText: translatedJson.questions[i].questionText,
+                        options: translatedJson.questions[i].options || q.options,
+                    }))
+                };
+
+                setTranslations(prev => ({ ...prev, [targetLanguage]: newTranslatedSurvey }));
+                setDisplaySurvey(newTranslatedSurvey);
+
+            } catch (error) {
+                console.error("Translation failed:", error);
+                showToast(`Failed to translate to ${langName}.`);
+                setTargetLanguage('en');
+            } finally {
+                setIsTranslating(false);
+            }
+        };
+
+        translateSurvey();
+    }, [targetLanguage, originalSurvey, translations, showToast]);
+
+    const handleAnswerChange = (questionIndex, value) => {
+        const now = Date.now();
+        const timeSpent = (now - questionTimestamps.current[questionIndex]) / 1000; // in seconds
+
+        const newAnswers = [...answers];
+        const answerIndex = newAnswers.findIndex(a => a.questionIndex === questionIndex);
+        if (answerIndex > -1) {
+            newAnswers[answerIndex].value = value;
+            newAnswers[answerIndex].timeSpent = timeSpent;
+        } else {
+            newAnswers.push({ questionIndex, value, timeSpent });
+        }
+        setAnswers(newAnswers);
+
+        const question = originalSurvey.questions[questionIndex];
+        let nextVisibleQuestionIndex = questionIndex + 1;
+        let endSurvey = false;
+
+        if (question.logic && question.logic.length > 0) {
+            const originalOption = originalSurvey.questions[questionIndex].options.find(opt => displaySurvey.questions[questionIndex].options.includes(value));
+            const rule = question.logic.find(l => l.triggerAnswer === (originalOption || value));
+            if (rule) {
+                if (rule.targetQuestion === 'end') {
+                    endSurvey = true;
+                } else {
+                    nextVisibleQuestionIndex = rule.targetQuestion;
+                }
+            }
+        }
+        
+        setVisibleQuestionIndices(prevVisible => {
+            const currentIndexPosition = prevVisible.indexOf(questionIndex);
+            const baseVisible = prevVisible.slice(0, currentIndexPosition + 1);
+            if (endSurvey) return baseVisible;
+            if (nextVisibleQuestionIndex < originalSurvey.questions.length && !baseVisible.includes(nextVisibleQuestionIndex)) {
+                questionTimestamps.current[nextVisibleQuestionIndex] = Date.now();
+                return [...baseVisible, nextVisibleQuestionIndex];
+            }
+            return baseVisible;
+        });
+    };
+    
+    const getSentiment = async (text) => {
+        const prompt = `Analyze the sentiment of the following text. Respond with only one word: "Positive", "Negative", or "Neutral". Text: "${text}"`;
+        try {
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) return "Neutral";
+            const result = await response.json();
+            const sentiment = result?.candidates?.[0]?.content?.parts?.[0]?.text.trim().replace(/"/g, '');
+            if (['Positive', 'Negative', 'Neutral'].includes(sentiment)) {
+                return sentiment;
+            }
+            return "Neutral";
+        } catch (error) {
+            console.error("Sentiment analysis failed:", error);
+            return "Neutral";
+        }
+    };
+
+    const handleSubmit = async () => {
+        setIsSubmitting(true);
+        
+        const processedAnswers = await Promise.all(answers.map(async (ans) => {
+            const question = originalSurvey.questions[ans.questionIndex];
+            if (question.type === 'TEXT' && ans.value) {
+                const sentiment = await getSentiment(ans.value);
+                return { ...ans, sentiment: sentiment };
+            }
+            return ans;
+        }));
+
+        const paradata = {
+            startTime: new Date(startTime.current).toISOString(),
+            endTime: new Date().toISOString(),
+            totalDuration: (Date.now() - startTime.current) / 1000,
+            device: navigator.userAgent,
+            language: targetLanguage,
+        };
+        
+        const responseData = {
+            surveyId,
+            answers: processedAnswers.filter(a => a.value !== ''),
+            paradata,
+            submittedAt: serverTimestamp(),
+        };
+
+        try {
+            const collectionRef = collection(db, `artifacts/${appId}/public/data/responses/${surveyId}/responses`);
+            await addDoc(collectionRef, responseData);
+            setIsSubmitted(true);
+        } catch (error) {
+            console.error("Error submitting response:", error);
+            showToast("Failed to submit response.");
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+    
+    if (isLoading || !displaySurvey) return <div className="text-center py-10"><Loader2 className="h-8 w-8 animate-spin text-indigo-600 mx-auto" /><p className="mt-2 text-slate-500">Loading survey...</p></div>;
+    if (!originalSurvey) return <div className="text-center py-10 max-w-md mx-auto"><h2 className="text-xl font-bold">Survey Not Found</h2><p className="text-slate-500 mt-2">The link may be incorrect or the survey deleted.</p><button onClick={onBack} className="mt-4 text-indigo-600">Go to Dashboard</button></div>;
+    
+    if (isSubmitted) {
+        return (
+            <div className="max-w-2xl mx-auto text-center py-20">
+                <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
+                <h1 className="text-3xl font-bold text-slate-900">Thank You!</h1>
+                <p className="text-slate-600 mt-2">Your response has been recorded.</p>
+                <button onClick={onBack} className="mt-8 bg-indigo-600 text-white font-semibold px-6 py-2 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors">
+                    Back to Home
+                </button>
+            </div>
+        );
+    }
+
+    const isLastVisibleQuestionAnswered = () => {
+        const lastQuestionIndex = visibleQuestionIndices[visibleQuestionIndices.length - 1];
+        const lastAnswer = answers.find(a => a.questionIndex === lastQuestionIndex);
+        return lastAnswer && lastAnswer.value !== '';
+    };
+
+    const shouldShowSubmit = () => {
+        if (!originalSurvey) return false;
+        const lastVisibleIndex = visibleQuestionIndices[visibleQuestionIndices.length - 1];
+        const lastQuestion = originalSurvey.questions[lastVisibleIndex];
+        const lastAnswerValue = answers.find(a => a.questionIndex === lastVisibleIndex)?.value;
+        const lastAnswerOriginalValue = originalSurvey.questions[lastVisibleIndex].options?.find(opt => displaySurvey.questions[lastVisibleIndex].options.includes(lastAnswerValue)) || lastAnswerValue;
+
+        if (lastQuestion.type === 'MCQ' && lastQuestion.logic?.length > 0) {
+            const rule = lastQuestion.logic.find(l => l.triggerAnswer === lastAnswerOriginalValue);
+            if (rule?.targetQuestion === 'end') return true;
+        }
+        if (lastVisibleIndex === originalSurvey.questions.length - 1) return true;
+        return false;
+    };
+
+    return (
+        <div className="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-slate-200 relative">
+            <div className="absolute top-4 right-4 flex items-center space-x-2">
+                {isTranslating ? <Loader2 className="h-5 w-5 animate-spin text-slate-400" /> : <Languages className="h-5 w-5 text-slate-400" />}
+                <select value={targetLanguage} onChange={e => setTargetLanguage(e.target.value)} disabled={isTranslating} className="text-sm border-slate-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="en">English</option>
+                    <option value="as">Assamese</option>
+                    <option value="bn">Bengali</option>
+                    <option value="bho">Bhojpuri</option>
+                    <option value="gu">Gujarati</option>
+                    <option value="hi">Hindi</option>
+                    <option value="kn">Kannada</option>
+                    <option value="ml">Malayalam</option>
+                    <option value="mr">Marathi</option>
+                    <option value="ne">Nepali</option>
+                    <option value="or">Oriya</option>
+                    <option value="pa">Punjabi</option>
+                    <option value="sd">Sindhi</option>
+                    <option value="ta">Tamil</option>
+                    <option value="te">Telugu</option>
+                    <option value="ur">Urdu</option>
+                    <option value="es">Español</option>
+                    <option value="fr">Français</option>
+                    <option value="de">Deutsch</option>
+                    <option value="ja">日本語</option>
+                </select>
+            </div>
+            <h1 className="text-3xl font-bold text-slate-900 mb-2">{displaySurvey.title}</h1>
+            <p className="text-slate-500 mb-8">Please fill out the survey below.</p>
+            
+            <div className="space-y-8">
+                {displaySurvey.questions.map((q, index) => {
+                    if (!visibleQuestionIndices.includes(index)) {
+                        return null;
+                    }
+                    return (
+                    <div key={index}>
+                        <label className="block font-semibold text-slate-800 mb-3">{index + 1}. {q.questionText}</label>
+                         {q.type === 'IMAGE' && q.imageUrl && (
+                            <div className="mb-4">
+                                <img src={q.imageUrl} alt="Survey question visual" className="rounded-lg max-w-full h-auto" />
+                            </div>
+                        )}
+                        {(q.type === 'MCQ' || q.type === 'IMAGE') && (
+                            <div className="space-y-2">
+                                {q.options.map((opt, oIndex) => (
+                                    <label key={oIndex} className="flex items-center p-3 border border-slate-200 rounded-lg hover:bg-indigo-50 cursor-pointer">
+                                        <input type="radio" name={`q_${index}`} value={opt} checked={answers.find(a => a.questionIndex === index)?.value === opt} onChange={e => handleAnswerChange(index, e.target.value)} className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300" />
+                                        <span className="ml-3 text-slate-700">{opt}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                        {q.type === 'RATING' && (
+                            <div className="flex items-center space-x-2">
+                                {[...Array(q.ratingMax || 5)].map((_, i) => (
+                                    <label key={i} className={`h-10 w-10 border rounded-full flex items-center justify-center cursor-pointer transition-colors ${answers.find(a => a.questionIndex === index)?.value === i + 1 ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-300 hover:bg-slate-100'}`}>
+                                        <input type="radio" name={`q_${index}`} value={i + 1} onChange={e => handleAnswerChange(index, parseInt(e.target.value))} className="sr-only" />
+                                        {i + 1}
+                                    </label>
+                                ))}
+                            </div>
+                        )}
+                        {q.type === 'TEXT' && (
+                            <div className="relative">
+                                <textarea data-q-index={index} defaultValue={answers.find(a => a.questionIndex === index)?.value || ''} onBlur={e => handleAnswerChange(index, e.target.value)} rows="4" className="w-full p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition pr-10"></textarea>
+                                {recognitionRef.current && (
+                                    <button onClick={() => isListening ? stopListening() : startListening(index)} className={`absolute top-2 right-2 p-2 rounded-full transition-colors ${isListening && listeningIndex === index ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200'}`}>
+                                        {isListening && listeningIndex === index ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )})}
+            </div>
+
+            {isLastVisibleQuestionAnswered() && shouldShowSubmit() && (
+                <button onClick={handleSubmit} disabled={isSubmitting} className="w-full mt-10 bg-indigo-600 text-white font-semibold py-3 rounded-lg shadow-sm hover:bg-indigo-700 transition-colors disabled:bg-indigo-300 flex items-center justify-center">
+                    {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <><Send className="h-5 w-5 mr-2" /> Submit Response</>}
+                </button>
+            )}
+        </div>
+    );
+}
+
+// --- NEW: Conversational Survey Taker Page ---
+function ConversationalSurveyTakerPage({ db, userId, appId, surveyId, onBack, showToast, survey }) {
+    const [messages, setMessages] = useState([]);
+    const [userInput, setUserInput] = useState('');
+    const [isAiThinking, setIsAiThinking] = useState(true);
+    const [isComplete, setIsComplete] = useState(false);
+    const chatContainerRef = useRef(null);
+
+    useEffect(() => {
+        // Scroll to bottom of chat
+        if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+    }, [messages]);
+
+    // Initial message from AI
+    useEffect(() => {
+        if (survey?.researchGoal) {
+            const getFirstQuestion = async () => {
+                const prompt = `You are a friendly and professional AI research agent. Your goal is to conduct an interview to understand: "${survey.researchGoal}".
+                Start the conversation with a welcoming message and ask your first, most important question to begin the interview.
+                Respond with only the AI's first message.`;
+                
+                try {
+                    const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+                    const apiKey = "";
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                    const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (!response.ok) throw new Error("API request failed");
+                    const result = await response.json();
+                    const firstQuestion = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    setMessages([{ sender: 'ai', text: firstQuestion }]);
+                } catch (error) {
+                    console.error("Failed to get first question:", error);
+                    setMessages([{ sender: 'ai', text: "Hello! I'm here to ask a few questions. Let's get started. What's on your mind?" }]);
+                } finally {
+                    setIsAiThinking(false);
+                }
+            };
+            getFirstQuestion();
+        }
+    }, [survey]);
+
+    const handleSendMessage = async () => {
+        if (!userInput.trim() || isAiThinking) return;
+
+        const newMessages = [...messages, { sender: 'user', text: userInput }];
+        setMessages(newMessages);
+        setUserInput('');
+        setIsAiThinking(true);
+
+        const conversationHistory = newMessages.map(m => `${m.sender === 'ai' ? 'AI' : 'User'}: ${m.text}`).join('\n');
+        
+        const prompt = `You are a friendly and professional AI research agent. Your goal is to conduct an interview to understand: "${survey.researchGoal}".
+        Below is the conversation history so far. Analyze it and ask the next best strategic question to get closer to the goal.
+        If you believe you have gathered enough information to satisfy the research goal, end the conversation with a thank you message and include the special token "[SURVEY_COMPLETE]".
+        
+        Conversation History:
+        ${conversationHistory}
+        
+        Your next question/response:`;
+
+        try {
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!response.ok) throw new Error("API request failed");
+            const result = await response.json();
+            let aiResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+            if (aiResponse.includes("[SURVEY_COMPLETE]")) {
+                aiResponse = aiResponse.replace("[SURVEY_COMPLETE]", "").trim();
+                setIsComplete(true);
+                // Save conversation to database
+                const responseData = {
+                    surveyId,
+                    answers: newMessages.concat([{ sender: 'ai', text: aiResponse }]), // save full transcript
+                    submittedAt: serverTimestamp(),
+                };
+                const collectionRef = collection(db, `artifacts/${appId}/public/data/responses/${surveyId}/responses`);
+                await addDoc(collectionRef, responseData);
+            }
+
+            setMessages(prev => [...prev, { sender: 'ai', text: aiResponse }]);
+
+        } catch (error) {
+            console.error("Failed to get next question:", error);
+            setMessages(prev => [...prev, { sender: 'ai', text: "I'm sorry, there was an error. Could you please repeat that?" }]);
+        } finally {
+            setIsAiThinking(false);
+        }
+    };
+
+    return (
+        <div className="max-w-2xl mx-auto bg-white p-4 sm:p-8 rounded-xl shadow-lg border border-slate-200">
+            <h1 className="text-2xl font-bold text-slate-900 mb-2">{survey.title}</h1>
+            <p className="text-slate-500 mb-4">An AI agent will be asking you some questions.</p>
+            <div ref={chatContainerRef} className="h-96 overflow-y-auto bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-4">
+                {messages.map((msg, index) => (
+                    <div key={index} className={`flex items-start gap-3 ${msg.sender === 'user' ? 'justify-end' : ''}`}>
+                        {msg.sender === 'ai' && <div className="flex-shrink-0 h-8 w-8 rounded-full bg-purple-200 flex items-center justify-center"><Bot className="h-5 w-5 text-purple-600"/></div>}
+                        <div className={`p-3 rounded-lg max-w-sm ${msg.sender === 'ai' ? 'bg-slate-200 text-slate-800' : 'bg-indigo-600 text-white'}`}>
+                            <p className="text-sm">{msg.text}</p>
+                        </div>
+                    </div>
+                ))}
+                {isAiThinking && <div className="flex items-start gap-3"><div className="flex-shrink-0 h-8 w-8 rounded-full bg-purple-200 flex items-center justify-center"><Bot className="h-5 w-5 text-purple-600"/></div><div className="p-3 rounded-lg bg-slate-200"><Loader2 className="h-5 w-5 animate-spin text-slate-500"/></div></div>}
+            </div>
+            {isComplete ? (
+                 <div className="text-center p-4 mt-4 bg-green-100 text-green-800 rounded-lg">
+                    <p className="font-semibold">Thank you! Your responses have been submitted.</p>
+                    <button onClick={onBack} className="mt-2 text-sm text-indigo-600 font-semibold">Back to Dashboard</button>
+                 </div>
+            ) : (
+                <div className="mt-4 flex items-center space-x-2">
+                    <input type="text" value={userInput} onChange={e => setUserInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSendMessage()} placeholder="Type your answer..." className="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none" disabled={isAiThinking} />
+                    <button onClick={handleSendMessage} disabled={isAiThinking || !userInput.trim()} className="bg-indigo-600 text-white p-2.5 rounded-lg shadow-sm hover:bg-indigo-700 disabled:bg-indigo-300">
+                        <Send className="h-5 w-5"/>
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SettingsPage({ onBack, userId, integrations, setIntegrations }) {
+    const [themeColor, setThemeColor] = useState('#4f46e5'); // Default indigo
+    const [multilingualEnabled, setMultilingualEnabled] = useState(true);
+
+    const handleIntegrationToggle = (integration) => {
+        setIntegrations(prev => ({ ...prev, [integration]: !prev[integration] }));
+    };
+
+    return (
+        <div>
+            <header className="flex items-center justify-between mb-8">
+                <button onClick={onBack} className="flex items-center text-slate-600 hover:text-indigo-600">
+                    <ArrowLeft className="h-5 w-5 mr-2" /> Back to Dashboard
+                </button>
+            </header>
+            <div className="max-w-2xl mx-auto bg-white p-8 rounded-xl shadow-md border border-slate-200">
+                <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
+                <p className="text-slate-500 mt-1">Customize your survey experience.</p>
+
+                <div className="mt-8 space-y-6">
+                    <div>
+                        <label className="block font-semibold text-slate-700 mb-2">Custom Branding</label>
+                        <div className="flex items-center space-x-4 p-4 border rounded-lg">
+                             <div className="flex items-center space-x-2">
+                                <label htmlFor="themeColor" className="text-sm text-slate-600">Theme Color:</label>
+                                <input type="color" id="themeColor" value={themeColor} onChange={e => setThemeColor(e.target.value)} className="w-10 h-10 border-none rounded-md" />
+                            </div>
+                            <div className="flex items-center space-x-2">
+                                <label htmlFor="logoUpload" className="text-sm text-slate-600">Logo:</label>
+                                <button className="text-sm bg-slate-100 px-3 py-1 rounded-md hover:bg-slate-200">Upload Logo</button>
+                            </div>
+                        </div>
+                    </div>
+                     <div>
+                        <label className="block font-semibold text-slate-700 mb-2">Multilingual Support</label>
+                        <div className="p-4 border rounded-lg">
+                            <div className="flex items-center justify-between">
+                                <p className="text-sm text-slate-600">Enable AI translation for respondents</p>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input type="checkbox" checked={multilingualEnabled} onChange={() => setMultilingualEnabled(!multilingualEnabled)} className="sr-only peer" />
+                                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                             {multilingualEnabled && <p className="text-xs text-slate-400 mt-2">Allows survey takers to select their preferred language. Translations are powered by AI.</p>}
+                        </div>
+                    </div>
+                     <div>
+                        <label className="block font-semibold text-slate-700 mb-2">Integrations</label>
+                        <div className="p-4 border rounded-lg space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <img src="[https://upload.wikimedia.org/wikipedia/commons/3/34/Microsoft_Office_Excel_%282019%E2%80%93present%29.svg](https://upload.wikimedia.org/wikipedia/commons/3/34/Microsoft_Office_Excel_%282019%E2%80%93present%29.svg)" alt="Google Sheets" className="h-6 w-6 mr-3"/>
+                                    <p className="text-sm text-slate-600">Google Sheets</p>
+                                </div>
+                                <button onClick={() => handleIntegrationToggle('googleSheets')} className={`font-semibold text-sm px-3 py-1 rounded-md ${integrations.googleSheets ? 'bg-slate-200 text-slate-700' : 'bg-blue-600 text-white'}`}>
+                                    {integrations.googleSheets ? 'Disconnect' : 'Connect'}
+                                </button>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center">
+                                    <img src="[https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg](https://upload.wikimedia.org/wikipedia/commons/d/d5/Slack_icon_2019.svg)" alt="Slack" className="h-6 w-6 mr-3"/>
+                                    <p className="text-sm text-slate-600">Slack</p>
+                                </div>
+                                <button className="font-semibold text-sm px-3 py-1 rounded-md bg-slate-200 text-slate-500 cursor-not-allowed">
+                                    Coming Soon
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                     <div>
+                        <label className="block font-semibold text-slate-700 mb-2">Account</label>
+                        <div className="p-4 border rounded-lg text-sm text-slate-500 flex items-center justify-between">
+                           <div>
+                                <p>Your User ID:</p>
+                                <p className="font-mono text-xs bg-slate-100 p-1 rounded">{userId || 'loading...'}</p>
+                           </div>
+                           <button className="flex items-center space-x-2 text-red-500 hover:text-red-700 font-semibold text-sm">
+                               <LogOut className="h-4 w-4"/>
+                               <span>Log Out</span>
+                           </button>
+                        </div>
+                    </div>
+                </div>
+                 <button onClick={onBack} className="w-full mt-8 bg-indigo-600 text-white font-semibold py-2 rounded-lg shadow-sm hover:bg-indigo-700">
+                    Save Changes
+                </button>
+            </div>
+        </div>
+    );
+}
+
+
+// --- Helper Components ---
+
+function Toast({ message }) {
+    return (
+        <div className="fixed bottom-5 right-5 bg-slate-800 text-white px-5 py-3 rounded-lg shadow-xl animate-fade-in-out">
+            {message}
+        </div>
+    );
+}
+
+const style = document.createElement('style');
+style.innerHTML = `
+  @keyframes fade-in-out {
+    0% { opacity: 0; transform: translateY(10px); }
+    10% { opacity: 1; transform: translateY(0); }
+    90% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(10px); }
+  }
+  .animate-fade-in {
+      animation: fade-in 0.5s ease-in-out;
+  }
+  @keyframes fade-in {
+      0% { opacity: 0; transform: translateY(10px); }
+      100% { opacity: 1; transform: translateY(0); }
+  }
+`;
+document.head.appendChild(style);

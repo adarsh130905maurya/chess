@@ -10,7 +10,7 @@
     ["♖", "♘", "♗", "♕", "♔", "♗", "♘", "♖"]
   ],
   "turn": "Black",
-  "status": "Invalid move from b7 to e4.",
+  "status": "Move e2 to e4 executed.",
   "capturedWhite": "",
   "capturedBlack": ""
 }
