@@ -1,0 +1,12 @@
+.git
+.gitignore
+.vscode
+node_modules
+my-app
+board.txt
+input.txt
+chess.exe
+chess
+*.exe
+README.md
+.dockerignore
