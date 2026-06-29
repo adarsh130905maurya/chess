@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Runtime IPC files
+board.txt
+input.txt
+
+# Compiled binaries
+chess
+chess.exe
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+
+# Unused experiments
+my-app/
