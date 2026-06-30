@@ -18,3 +18,6 @@ Thumbs.db
 
 # Unused experiments
 my-app/
+
+# Per-game runtime state files
+games/

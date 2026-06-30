@@ -20,6 +20,10 @@ char lastMessage[100] = "Game started.";
 char capturedWhite[100] = "";
 char capturedBlack[100] = "";
 
+/* Dynamic filenames — set from argv or fallback to defaults */
+char boardFile[256] = "board.txt";
+char inputFile[256] = "input.txt";
+
 void init_board();
 void write_board_to_file();
 const char* piece_symbol(char p);
@@ -37,17 +41,37 @@ int is_in_check_board(int player, char b[BOARD_SIZE][BOARD_SIZE]);
 int is_in_check(int player);
 int is_checkmate(int player);
 
-int main() {
+int main(int argc, char *argv[]) {
+    /* Accept optional filename arguments: ./chess board_<id>.txt input_<id>.txt */
+    if (argc >= 3) {
+        strncpy(boardFile, argv[1], sizeof(boardFile) - 1);
+        boardFile[sizeof(boardFile) - 1] = '\0';
+        strncpy(inputFile, argv[2], sizeof(inputFile) - 1);
+        inputFile[sizeof(inputFile) - 1] = '\0';
+    }
+
     init_board();
     write_board_to_file();
-    printf("Chess game started. Waiting for moves...\n");
+    printf("Chess engine started. board=%s input=%s\n", boardFile, inputFile);
+    fflush(stdout);
+
     while (1) {
-        FILE *fp = fopen("input.txt", "r");
+        FILE *fp = fopen(inputFile, "r");
         if (fp != NULL) {
             char move[20];
             if (fgets(move, sizeof(move), fp) != NULL) {
                 move[strcspn(move, "\r\n")] = 0;
-                if (strlen(move) >= 5) {
+
+                /* ---- RESTART command ---- */
+                if (strcmp(move, "RESTART") == 0) {
+                    init_board();
+                    turn = 0;
+                    strncpy(lastMessage, "Game started.", sizeof(lastMessage) - 1);
+                    capturedWhite[0] = '\0';
+                    capturedBlack[0] = '\0';
+
+                /* ---- Normal move ---- */
+                } else if (strlen(move) >= 5) {
                     char source[3], dest[3];
                     sscanf(move, "%2s %2s", source, dest);
                     int sr, sc, dr, dc;
@@ -99,7 +123,8 @@ int main() {
                 }
             }
             fclose(fp);
-            fp = fopen("input.txt", "w");
+            /* Clear the input file after reading */
+            fp = fopen(inputFile, "w");
             if (fp) fclose(fp);
             write_board_to_file();
         }
@@ -131,7 +156,7 @@ const char* piece_symbol(char p) {
 }
 
 void write_board_to_file() {
-    FILE *fp=fopen("board.txt","w");
+    FILE *fp = fopen(boardFile, "w");
     if(!fp) return;
     fprintf(fp,"{\n  \"board\": [\n");
     for(int i=0;i<BOARD_SIZE;i++){
@@ -145,7 +170,7 @@ void write_board_to_file() {
     fprintf(fp,"  ],\n  \"turn\": \"%s\",\n",turn==0?"White":"Black");
     fprintf(fp,"  \"status\": \"%s\",\n",lastMessage);
     fprintf(fp,"  \"capturedWhite\": \"%s\",\n",capturedWhite);
-    fprintf(fp,"  \"capturedBlack\": \"%s\"\n}\n");
+    fprintf(fp,"  \"capturedBlack\": \"%s\"\n}\n",capturedBlack);
     fclose(fp);
 }
 

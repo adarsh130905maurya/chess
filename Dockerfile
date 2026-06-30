@@ -17,8 +17,8 @@ COPY public/ ./public/
 # Compile the C chess engine at build time
 RUN gcc chess.c -o chess -std=c99
 
-# Create empty runtime IPC files
-RUN touch board.txt input.txt
+# Create the games directory for per-session state files
+RUN mkdir -p games
 
 # Make start script executable
 RUN chmod +x start.sh

@@ -2,19 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="A two-player chess game you can play in the browser. Share a link to play with a friend.">
   <title>Chess Game</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="container">
-    <h1>Chess Game</h1>
+    <header>
+      <h1>♟ Chess</h1>
+      <!-- Game ID bar: shows session ID and share/copy controls -->
+      <div id="gameIdBar">
+        <span class="game-id-label">Game ID:</span>
+        <code id="gameIdText">—</code>
+        <button id="copyLinkBtn" title="Copy shareable link">📋 Copy Link</button>
+        <button id="newGameBtn" title="Start a brand-new game">＋ New Game</button>
+      </div>
+    </header>
+
+    <!-- Chess board rendered here by script.js -->
     <div id="board"></div>
-    <form id="moveForm">
-      <input type="text" id="moveInput" placeholder="Enter move e.g., e2 e4">
-      <button type="submit">Submit Move</button>
-    </form>
-    <p id="status"></p>
+
+    <!-- Move input + action buttons -->
+    <div class="controls">
+      <form id="moveForm">
+        <input type="text" id="moveInput" placeholder="e.g. e2 e4" autocomplete="off" spellcheck="false">
+        <button type="submit" id="submitBtn">Submit Move</button>
+      </form>
+      <button id="restartBtn">🔄 Restart Game</button>
+    </div>
+
+    <!-- Status messages -->
+    <p id="statusMsg"></p>
   </div>
+
   <script src="script.js"></script>
 </body>
 </html>
