@@ -6,7 +6,10 @@
    - Restart button (RESTART signal to C engine)
    - Copy shareable link
    - New Game button
+   - Polling /board every second
    ══════════════════════════════════════════════ */
+
+const POLL_INTERVAL_MS = 1000;
 
 let gameId = null;
 
@@ -33,11 +36,25 @@ async function resolveGameId() {
   }
 
   // 3. Request a fresh game ID from the server
-  const res = await fetch('/newgame');
-  const data = await res.json();
-  gameId = data.gameId;
-  localStorage.setItem('chessGameId', gameId);
-  history.replaceState(null, '', `?gameId=${gameId}`);
+  gameId = await fetchNewGameId();
+  if (gameId) {
+    localStorage.setItem('chessGameId', gameId);
+    history.replaceState(null, '', `?gameId=${gameId}`);
+  }
+}
+
+/* Fetch new game ID from server */
+async function fetchNewGameId() {
+  try {
+    const response = await fetch('/newgame');
+    if (!response.ok) throw new Error('Failed to fetch new game ID');
+    const data = await response.json();
+    return data.gameId;
+  } catch (err) {
+    showError('Failed to create new game');
+    console.error(err);
+    return null;
+  }
 }
 
 /* ── Board Rendering ── */
@@ -53,9 +70,8 @@ function renderBoard(data) {
   // Rows
   for (let i = 0; i < data.board.length; i++) {
     html += `<tr><th class="rank-label">${8 - i}</th>`;
-    data.board[i].forEach((cell, j) => {
-      const shade = (i + j) % 2 === 0 ? 'light' : 'dark';
-      html += `<td class="${shade}">${cell}</td>`;
+    data.board[i].forEach(cell => {
+      html += `<td>${cell}</td>`;
     });
     html += '</tr>';
   }
@@ -64,8 +80,8 @@ function renderBoard(data) {
   // Info panel
   html += `
     <div class="info">
-      <span class="turn-badge ${data.turn.toLowerCase()}">${data.turn}'s turn</span>
-      <span class="status-text">${data.status}</span>
+      <p>Turn: ${data.turn}</p>
+      <p>Status: ${data.status}</p>
     </div>`;
 
   // Captured pieces
@@ -94,86 +110,100 @@ function fetchBoard() {
     })
     .then(data => {
       renderBoard(data);
-      clearStatus();
+      clearError();
     })
     .catch(err => {
-      // Silently ignore transient errors (spin-up, restart mid-flight)
-      console.warn('Board fetch error:', err.message);
+      showError(`Error fetching board: ${err.message}`);
     });
 }
 
-/* ── Status helpers ── */
-function setStatus(msg, isError = false) {
-  const el = document.getElementById('statusMsg');
-  el.textContent = msg;
-  el.className = isError ? 'error' : 'success';
+/* ── Status and Error helpers ── */
+function showError(message) {
+  const errorDiv = document.getElementById('errorDisplay');
+  errorDiv.textContent = message;
+  errorDiv.style.display = 'block';
 }
-function clearStatus() {
-  const el = document.getElementById('statusMsg');
-  el.textContent = '';
-  el.className = '';
+
+function clearError() {
+  document.getElementById('errorDisplay').style.display = 'none';
+}
+
+function showStatus(message, duration = 1000) {
+  const statusDiv = document.getElementById('statusDisplay');
+  statusDiv.textContent = message;
+  statusDiv.style.display = 'block';
+  setTimeout(() => {
+    statusDiv.style.display = 'none';
+  }, duration);
 }
 
 /* ── Game ID Display ── */
 function updateGameIdDisplay() {
-  document.getElementById('gameIdText').textContent =
-    gameId ? gameId.slice(0, 8) + '…' : '—';
+  document.getElementById('gameIdValue').textContent = gameId || '—';
 }
 
 /* ── Submit Move ── */
 document.getElementById('moveForm').addEventListener('submit', e => {
   e.preventDefault();
-  const move = document.getElementById('moveInput').value.trim();
+  const moveInput = document.getElementById('moveInput');
+  const move = moveInput.value.trim();
   if (!move || !gameId) return;
+
+  showStatus('Submitting move...', 1000);
 
   fetch(`/move?gameId=${gameId}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ move })
   })
-    .then(r => r.text())
-    .then(msg => {
-      setStatus(msg);
-      document.getElementById('moveInput').value = '';
+    .then(r => {
+      if (!r.ok) throw new Error('Failed to submit move');
+      return r.text();
     })
-    .catch(err => setStatus('Error submitting move.', true));
+    .then(msg => {
+      showStatus(msg, 1000);
+      moveInput.value = '';
+      fetchBoard();
+    })
+    .catch(err => {
+      showError(`Move error: ${err.message}`);
+    });
 });
 
 /* ── Restart Game ── */
 document.getElementById('restartBtn').addEventListener('click', () => {
   if (!gameId) return;
-  if (!confirm('Restart this game? The board will reset to starting position.')) return;
+  if (!confirm('Restart the game? All pieces will be reset.')) return;
 
-  setStatus('Restarting…');
+  showStatus('Restarting game...', 1000);
   document.getElementById('restartBtn').disabled = true;
 
   fetch(`/restart?gameId=${gameId}`, { method: 'POST' })
-    .then(r => r.json())
+    .then(r => {
+      if (!r.ok) throw new Error('Failed to restart');
+      return r.json();
+    })
     .then(() => {
-      setStatus('Game restarted! White to move.');
+      showStatus('Game restarted!', 2000);
       // Give the C engine ~1.5s to reset and write the fresh board
       setTimeout(() => {
         fetchBoard();
         document.getElementById('restartBtn').disabled = false;
-        clearStatus();
       }, 1500);
     })
     .catch(err => {
-      setStatus('Restart failed. Try again.', true);
+      showError(`Restart error: ${err.message}`);
       document.getElementById('restartBtn').disabled = false;
     });
 });
 
 /* ── Copy Shareable Link ── */
-document.getElementById('copyLinkBtn').addEventListener('click', () => {
-  const url = `${window.location.origin}?gameId=${gameId}`;
-  navigator.clipboard.writeText(url).then(() => {
-    const btn = document.getElementById('copyLinkBtn');
-    const original = btn.textContent;
-    btn.textContent = '✅ Copied!';
-    setTimeout(() => btn.textContent = original, 2000);
+document.getElementById('copyGameIdBtn').addEventListener('click', () => {
+  const gameLink = `${window.location.origin}?gameId=${gameId}`;
+  navigator.clipboard.writeText(gameLink).then(() => {
+    showStatus('Game link copied!', 2000);
   }).catch(() => {
-    setStatus(`Share this link: ${window.location.href}`, false);
+    showError('Failed to copy link');
   });
 });
 
@@ -181,14 +211,16 @@ document.getElementById('copyLinkBtn').addEventListener('click', () => {
 document.getElementById('newGameBtn').addEventListener('click', async () => {
   if (!confirm('Start a brand-new game? This tab will get a fresh session.')) return;
 
-  const res = await fetch('/newgame');
-  const data = await res.json();
-  gameId = data.gameId;
-  localStorage.setItem('chessGameId', gameId);
-  history.replaceState(null, '', `?gameId=${gameId}`);
-  updateGameIdDisplay();
-  fetchBoard();
-  setStatus('New game started!');
+  const newId = await fetchNewGameId();
+  if (newId) {
+    gameId = newId;
+    localStorage.setItem('chessGameId', gameId);
+    history.replaceState(null, '', `?gameId=${gameId}`);
+    updateGameIdDisplay();
+    clearError();
+    fetchBoard();
+    showStatus('New game created!', 2000);
+  }
 });
 
 /* ── Boot ── */
@@ -196,5 +228,5 @@ document.getElementById('newGameBtn').addEventListener('click', async () => {
   await resolveGameId();
   updateGameIdDisplay();
   fetchBoard();
-  setInterval(fetchBoard, 1000);
+  setInterval(fetchBoard, POLL_INTERVAL_MS);
 })();
